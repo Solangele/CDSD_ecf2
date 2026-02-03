@@ -1,0 +1,5 @@
+Python 3.9+
+PySpark 3.5+
+Pandas 2.0+
+Matplotlib 3.8+
+Seaborn 0.13+
