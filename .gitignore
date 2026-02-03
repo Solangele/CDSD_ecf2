@@ -1,2 +1,3 @@
 docker-compose.yml
-
+output/
+__pycache__/
