@@ -5,7 +5,6 @@ from datetime import datetime
 import os
 import sys
 
-# Configuration des chemins
 DATA_DIR = "/data_ecf"
 OUTPUT_DIR = "/output"
 
@@ -66,15 +65,12 @@ def clean_conso(conso_str):
     
 
 def main():
-    # Creer la session Spark
     spark = create_spark_session()
     print(f"Spark version: {spark.version}")
 
-     # Enregistrer les UDFs
     parse_timestamp_udf = F.udf(parse_multi_format_timestamp, TimestampType())
     clean_value_udf = F.udf(clean_conso, DoubleType())
 
-    # Charger les donnees brutes
     print("\n[1/6] Chargement des donnees brutes...")
     df_raw = spark.read \
         .option("header", "true") \
@@ -83,39 +79,33 @@ def main():
     initial_count = df_raw.count()
     print(f"  Lignes en entree: {initial_count:,}")
 
-    # Charger les bâtiments pour avoir la capacite
     df_batiments = spark.read \
         .option("header", "true") \
         .option("inferSchema", "true") \
         .csv(BATIMENTS_PATH)
     
-    # Parser les timestamps multi-formats
     print("\n[2/6] Parsing des timestamps multi-formats...")
     df_with_timestamp = df_raw.withColumn(
         "timestamp_parsed",
         parse_timestamp_udf(F.col("timestamp"))
     )
 
-    # Filtrer les timestamps invalides
     invalid_timestamps = df_with_timestamp.filter(F.col("timestamp_parsed").isNull()).count()
     df_with_timestamp = df_with_timestamp.filter(F.col("timestamp_parsed").isNotNull())
     print(f"  Timestamps invalides supprimes: {invalid_timestamps:,}")
 
 
-    # Convertir les consommations avec virgule decimale en float
     print("\n[3/6] Conversion des valeurs numeriques...")
     df_with_values = df_with_timestamp.withColumn(
         "conso_clean",
         clean_value_udf(F.col("consommation"))
     )
 
-    # Filtrer les valeurs non numeriques
     invalid_values = df_with_values.filter(F.col("conso_clean").isNull()).count()
     df_with_values = df_with_values.filter(F.col("conso_clean").isNotNull())
     print(f"  Valeurs non numeriques supprimees: {invalid_values:,}")
 
 
-    # Supprimer les valeurs negatives et les outliers (>1000 ug/m3)
     print("\n[4/6] Suppression des valeurs aberrantes...")
     negative_count = df_with_values.filter(F.col("conso_clean") < 0).count()
     outlier_count = df_with_values.filter(F.col("conso_clean") > 10000).count()
@@ -127,7 +117,6 @@ def main():
     print(f"  Outliers (>15000) supprimes: {outlier_count:,}")
 
 
-    # Dedupliquer sur (station_id, timestamp, pollutant)
     print("\n[5/6] Deduplication...")
     before_dedup = df_clean.count()
     df_dedup = df_clean.dropDuplicates(["batiment_id", "timestamp_parsed", "type_energie"])
@@ -136,10 +125,10 @@ def main():
     print(f"  Doublons supprimes: {duplicates_removed:,}")
 
 
-    # Calculer les agrégations
+
     print("\n[6/6] Agregation horaire et sauvegarde...")
 
-    # Ajouter les colonnes de temps
+  
     df_enriched = df_dedup.join(
         df_batiments.select("batiment_id", "nom", "commune", "type"),
         on="batiment_id",
@@ -157,7 +146,7 @@ def main():
         "month", F.month(F.col("timestamp_parsed"))
     )
 
-    # Conso horaires par bâtiments
+
     df_hourly = df_with_time.groupBy(
         "batiment_id", "type_energie", "unite", "date", "hour", "year", "month"
     ).agg(
@@ -172,8 +161,7 @@ def main():
 
     print(f"\n[Sauvegarde] Écriture du dataset partitionné par DATE et TYPE_ENERGIE...")
 
-    # 2. Sauvegarde Journalière (Partitionnée par ANNÉE)
-    # Idéal pour les analyses de tendances sur l'année
+
     df_hourly.write \
     .mode("overwrite") \
     .partitionBy("date", "type_energie") \
@@ -184,7 +172,7 @@ def main():
     df_final = df_hourly 
     final_count = df_final.count()
 
-    # Rapport final
+
     print("RAPPORT DE NETTOYAGE")
     print(f"Lignes en entree:              {initial_count:>12,}")
     print(f"Timestamps invalides:          {invalid_timestamps:>12,}")
@@ -202,7 +190,7 @@ def main():
     df_final.show(10)
 
 
-     # Statistiques par polluant
+
     print("\nStatistiques par type d'énergie:")
     df_final.groupBy("type_energie") \
         .agg(
@@ -214,7 +202,7 @@ def main():
         .orderBy("type_energie") \
         .show()
 
-    # Fermer Spark
+
     spark.stop()
 
 

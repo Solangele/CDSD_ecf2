@@ -9,29 +9,27 @@ spark = SparkSession.builder \
     .config("spark.driver.memory", "4g") \
     .getOrCreate()
 
-# --- 1. CHARGEMENT DU DATASET ENRICHI ---
-# On utilise directement le résultat du script 05
+
 PATH_ENRICHI = "/output/consommations_enrichies.parquet"
 
 print("--- Chargement des données enrichies ---")
 df_final = spark.read.parquet(PATH_ENRICHI)
 
-# --- 2. CALCULS COMPLÉMENTAIRES (MÉDIANE) ---
-# Ton script demandait spécifiquement la médiane par type
+
 print("Calcul des médianes de performance par catégorie...")
 window_spec = Window.partitionBy("type")
-# On utilise 'ipe' qui est déjà ton intensité énergétique (conso/m2)
+
 df_final = df_final.withColumn("mediane_type", F.percentile_approx("ipe", 0.5).over(window_spec))
 
-# --- 3. SAUVEGARDE DE L'AGRÉGATION FINALE ---
+
 print("Sauvegarde du fichier agrégé pour le rapport...")
 df_final.write.mode("overwrite").parquet("/output/consommations_agregees.parquet")
 
-# --- 4. DÉMONSTRATION SPARK SQL ---
+
 df_final.createOrReplaceTempView("v_conso")
 
 print("\n--- REQUÊTE 1 : TOP 5 COMMUNES ÉNERGIVORES ---")
-# On utilise conso_mean et les colonnes déjà fusionnées
+
 spark.sql("""
     SELECT commune, ROUND(SUM(conso_mean), 2) as total_kwh
     FROM v_conso
@@ -49,7 +47,7 @@ spark.sql("""
 """).show()
 
 print("\n--- REQUÊTE 3 : ANALYSE DES ANOMALIES (HORS-NORMES) ---")
-# Détection des bâtiments qui consomment 3x plus que la médiane de leur catégorie
+
 spark.sql("""
     SELECT nom, commune, type, ROUND(ipe, 4) as ipe_actuel, ROUND(mediane_type, 4) as mediane_ref
     FROM v_conso
