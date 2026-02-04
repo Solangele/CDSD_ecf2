@@ -9,34 +9,29 @@ spark = SparkSession.builder \
     .config("spark.driver.memory", "4g") \
     .getOrCreate()
 
-# --- 1. CHARGEMENT ---
-PATH_PARQUET = "/output/consommations_clean/par_heure"
-PATH_BATIMENTS = "/data_ecf/batiments.csv"
+# --- 1. CHARGEMENT DU DATASET ENRICHI ---
+# On utilise directement le résultat du script 05
+PATH_ENRICHI = "/output/consommations_enrichies.parquet"
 
-print("--- Chargement des données ---")
-df_conso = spark.read.parquet(PATH_PARQUET)
-df_bat = spark.read.option("header", "true").option("inferSchema", "true").csv(PATH_BATIMENTS)
+print("--- Chargement des données enrichies ---")
+df_final = spark.read.parquet(PATH_ENRICHI)
 
-# --- 2. JOINTURE ET CALCULS ---
-df_final = df_conso.join(df_bat, on="batiment_id")
-
-# Calcul de l'intensité énergétique
-df_final = df_final.withColumn("intensite", F.col("conso_mean") / F.col("surface_m2"))
-
-# --- 3. MÉDIANE PAR TYPE (Correction nom de colonne : 'type') ---
-print("Calcul des médianes par type...")
+# --- 2. CALCULS COMPLÉMENTAIRES (MÉDIANE) ---
+# Ton script demandait spécifiquement la médiane par type
+print("Calcul des médianes de performance par catégorie...")
 window_spec = Window.partitionBy("type")
-df_final = df_final.withColumn("mediane_type", F.percentile_approx("intensite", 0.5).over(window_spec))
+# On utilise 'ipe' qui est déjà ton intensité énergétique (conso/m2)
+df_final = df_final.withColumn("mediane_type", F.percentile_approx("ipe", 0.5).over(window_spec))
 
-# --- 4. SAUVEGARDE DU LIVRABLE ---
-# Utilisation du chemin relatif direct pour éviter le bug du ".."
-print("Sauvegarde du fichier Parquet...")
-df_final.write.mode("overwrite").parquet("output/consommations_agregees.parquet")
+# --- 3. SAUVEGARDE DE L'AGRÉGATION FINALE ---
+print("Sauvegarde du fichier agrégé pour le rapport...")
+df_final.write.mode("overwrite").parquet("/output/consommations_agregees.parquet")
 
-# --- 5. DÉMONSTRATION SPARK SQL (Correction noms : 'commune' et 'type') ---
+# --- 4. DÉMONSTRATION SPARK SQL ---
 df_final.createOrReplaceTempView("v_conso")
 
 print("\n--- REQUÊTE 1 : TOP 5 COMMUNES ÉNERGIVORES ---")
+# On utilise conso_mean et les colonnes déjà fusionnées
 spark.sql("""
     SELECT commune, ROUND(SUM(conso_mean), 2) as total_kwh
     FROM v_conso
@@ -45,21 +40,34 @@ spark.sql("""
     LIMIT 5
 """).show()
 
-print("\n--- REQUÊTE 2 : INTENSITÉ MOYENNE PAR TYPE ---")
+print("\n--- REQUÊTE 2 : PERFORMANCE (IPE) MOYENNE PAR TYPE ---")
 spark.sql("""
-    SELECT type, ROUND(AVG(intensite), 2) as intensite_moyenne
+    SELECT type, ROUND(AVG(ipe), 4) as ipe_moyen
     FROM v_conso
     GROUP BY type
-    ORDER BY intensite_moyenne DESC
+    ORDER BY ipe_moyen DESC
 """).show()
 
-print("\n--- REQUÊTE 3 : ÉCHANTILLON DES HORS-NORMES ---")
+print("\n--- REQUÊTE 3 : ANALYSE DES ANOMALIES (HORS-NORMES) ---")
+# Détection des bâtiments qui consomment 3x plus que la médiane de leur catégorie
 spark.sql("""
-    SELECT batiment_id, commune, type, ROUND(intensite, 2) as intensite, ROUND(mediane_type, 2) as mediane_type
+    SELECT nom, commune, type, ROUND(ipe, 4) as ipe_actuel, ROUND(mediane_type, 4) as mediane_ref
     FROM v_conso
-    WHERE intensite > (mediane_type * 3)
-    ORDER BY intensite DESC
+    WHERE ipe > (mediane_type * 3)
+    ORDER BY ipe DESC
 """).show(10)
+
+print("\n--- REQUÊTE 4 : IMPACT TEMPÉRATURE (CORRÉLATION) ---")
+spark.sql("""
+    SELECT 
+        CASE WHEN temperature < 5 THEN 'Froid (<5°C)'
+             WHEN temperature BETWEEN 5 AND 18 THEN 'Tempéré (5-18°C)'
+             ELSE 'Chaud (>18°C)' END as tranche_temp,
+        ROUND(AVG(conso_mean), 2) as conso_moyenne
+    FROM v_conso
+    GROUP BY 1
+    ORDER BY conso_moyenne DESC
+""").show()
 
 print("Analyse terminée avec succès.")
 spark.stop()

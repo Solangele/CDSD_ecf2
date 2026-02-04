@@ -16,8 +16,7 @@ BATIMENTS_PATH = os.path.join(DATA_DIR, "batiments.csv")
 def create_spark_session():
     return SparkSession.builder \
         .appName("ECF2 - Nettoyage") \
-        .master("spark://spark-master:7077") \
-        .config("spark.executor.memory", "2g") \
+        .master("local[*]") \
         .getOrCreate()
 
 
@@ -168,54 +167,22 @@ def main():
         F.count("*").alias("measurement_count")
     )
 
-    # Conso journalieres par bâtiment et type d'énergie
-    df_dayly = df_with_time.groupBy(
-        "batiment_id", "type_energie", "unite", "date"
-    ).agg(
-        F.round(F.mean("conso_clean"), 2).alias("conso_mean"),
-        F.round(F.min("conso_clean"), 2).alias("conso_min"),
-        F.round(F.max("conso_clean"), 2).alias("conso_max"),
-        F.count("*").alias("measurement_count")
-    )
 
-    # Conso mensuelle par commune
-    df_monthly = df_with_time.groupBy(
-        "commune", "type_energie", "month"
-    ).agg(
-        F.round(F.sum("conso_clean"), 2).alias("conso_total")
-    )
+    path_final = os.path.join(OUTPUT_DIR, "consommations_clean_partitionne")
 
-
-
-    # Configuration des dossiers de sortie
-    path_hourly = os.path.join(OUTPUT_DIR, "par_heure")
-    path_daily = os.path.join(OUTPUT_DIR, "par_jour")
-    path_monthly = os.path.join(OUTPUT_DIR, "par_mois")
-
-    print(f"\n[Sauvegarde] Écriture des fichiers Parquet partitionnés dans {OUTPUT_DIR}...")
-
-    # 1. Sauvegarde Horaire (Partitionnée par DATE)
-    # Idéal pour voir le détail d'une journée précise
-    df_hourly.write \
-        .mode("overwrite") \
-        .partitionBy("date") \
-        .parquet(path_hourly)
+    print(f"\n[Sauvegarde] Écriture du dataset partitionné par DATE et TYPE_ENERGIE...")
 
     # 2. Sauvegarde Journalière (Partitionnée par ANNÉE)
     # Idéal pour les analyses de tendances sur l'année
-    df_dayly.withColumn("year", F.year("date")).write \
-        .mode("overwrite") \
-        .partitionBy("year") \
-        .parquet(path_daily)
+    df_hourly.write \
+    .mode("overwrite") \
+    .partitionBy("date", "type_energie") \
+    .parquet(path_final)
 
-    # 3. Sauvegarde Mensuelle (Partitionnée par ANNÉE)
-    # Très léger, parfait pour les tableaux de bord globaux
-    df_monthly.write \
-        .mode("overwrite") \
-        .partitionBy("year") \
-        .parquet(path_monthly)
+    print(f"Sauvegarde terminée dans : {path_final}")
 
-    print("Sauvegarde terminée avec succès.")
+    df_final = df_hourly 
+    final_count = df_final.count()
 
     # Rapport final
     print("RAPPORT DE NETTOYAGE")
@@ -230,9 +197,7 @@ def main():
     print(f"Lignes apres agregation:       {final_count:>12,}")
     print(f"\nFichiers Parquet sauvegardes dans: {OUTPUT_DIR}")
 
-    # Afficher un apercu
-    df_final = df_hourly 
-    final_count = df_hourly.count()
+
     print("\nApercu des donnees nettoyees:")
     df_final.show(10)
 
